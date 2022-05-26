@@ -1,0 +1,54 @@
+---
+title: "Timeanalysis"
+author: "Kareena K"
+date: '2022-04-26'
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#  STACKED BOXPLOT
+# CUMULATIVE PLOTS 
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r}
+library(dplyr)
+library(ggplot2)
+av2 <- read.csv("/cloud/project/Data/CleanedAviationData.csv")
+head(av2)
+Weathercond = av2 %>% select(Event.Date.Year,Event.Date.Month,Total.Fatal.Injuries,Weather.Condition)
+head(Weathercond) 
+# Total Fatal Injuries By Year and Month  
+
+weather_con_year<- ggplot(data = Weathercond, aes(x = Event.Date.Year, y = Total.Fatal.Injuries, fill = factor(Weather.Condition))) + geom_bar(stat='identity') + scale_fill_brewer(palette = 16)+labs(title = "Figure: Years, Total Fatal Injuries Concerning Weather Condition", 
+    y = "Number of Fatal Injuries", x = "Years", fill = "Weather Condition")
+
+
+weather_con_month <- ggplot(data = Weathercond, aes(x = Event.Date.Month, y = Total.Fatal.Injuries, fill = factor(Weather.Condition))) + geom_bar(stat='identity') +xlim(0,12)+ scale_fill_brewer(palette = 13)+labs(title = "Figure: Months, Total Fatal Injuries Concerning Weather Condition", y = "Number of Fatal Injuries", x = "Months", fill = "Weather Condition")
+
+
+weather_con_month +scale_fill_discrete(labels = c("Instrument meterological Conditions", "Unknown", "Visual Meteorological Conditions","NA Values"))
+
+weather_con_year+scale_fill_discrete(labels = c("Instrument meterological Conditions", "Unknown", "Visual Meteorological Conditions","NA Values"))
+
+Weathercond$Weather.Condition <- factor(Weathercond$Weather.Condition, levels = c("Instrument meterological Conditions", "Unk", "Unknown", "Visual Meteorological Conditions", "NA"))
+
+# Year cumulative:
+cdf_year <- ecdf(Weathercond$Event.Date.Year)
+plot(cdf_year, xlab="Accident Years", 
+     ylab="Percentage of Accidents",main="Cumulative Distribution Plot of Accidents among Years")
+
+
+# Month Cumulative:
+cdf_Month <- ecdf(Weathercond$Event.Date.Month)
+plot(cdf_Month, xlab="Accident Months", 
+     ylab="Percentage of Accidents",main="Cumulative Distribution Plot of Accidents among Months")
+```

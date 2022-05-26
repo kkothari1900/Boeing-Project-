@@ -1,0 +1,589 @@
+---
+title: "aviation_data_cleaning"
+output: html_document
+---
+
+```{r}
+#install.packages("shiny")
+#install.packages("tidyverse")
+library(tidyverse)
+library(tidyverse)
+library(dplyr)
+library(lubridate)
+#install.packages("sjlabelled")
+library(sjlabelled)
+library(tidyr)
+#install.packages("networkD3")
+library(networkD3)
+#install.packages("sjmisc")
+library(sjmisc)
+#install.packages("RColorBrewer")
+#library(RcolorBrewer)
+#install.packages("extrafont")
+library(extrafont)
+library(stringr)
+library(car)
+```
+
+
+
+
+Continuing to clean the data, we seperate date information into months, days and years. We then derive the estimated season from this date information. We calculate Severity of accident using the Severity index formula, and inspect the data. We find that rows with 0's in the injury severity return -INF, so we replace infinite values with 0. We also clean up some category names.
+```{r}
+library(shiny)
+ui <- fluidPage(
+  selectInput("dataset", label = "Dataset", choices = ls("package:datasets")),
+  verbatimTextOutput("summary"),
+  tableOutput("table")
+)
+server <- function(input, output, session) {
+  # Create a reactive expression
+  dataset <- reactive({
+    get(input$dataset, "package:datasets")
+  })
+
+  output$summary <- renderPrint({
+    # Use a reactive expression by calling it like a function
+    summary(dataset())
+  })
+  
+  output$table <- renderTable({
+    dataset()
+  })
+}
+  
+
+shinyApp(ui, server)
+
+```
+
+
+
+```{r}
+#calculate the mean of severity index for airport codes
+av1 = av1 %>% 
+  group_by(Airport.Code) %>% 
+  mutate(mean_risk = mean(Severity.Index))
+
+
+#set character columns as factor or numeric
+av1$Broad.phase.of.flight = factor(av1$Broad.phase.of.flight)
+av1$Engine.Type = factor(av1$Engine.Type)
+av1$Weather.Condition = factor(av1$Weather.Condition)
+av1$Number.of.Engines = as.numeric(av1$Number.of.Engines)
+
+```
+Calculate the mean Severity for each airport code, and convert categorical columns into factors for graphing.
+
+```{r}
+av1$Severity.Index[av1$Severity.Index == "-Inf"] = 0
+qqPlot(av1$Severity.Index)
+```
+Using a qqplot to test normality we see that the data usually follows a normal distribution, but has some extreme outliers.
+
+
+The data looks skewed, so we apply the log() function to the severity index column in attempt to normalize the data. Here are also some boxplots of categorical aircraft variables plotted against the severity index to get a look at the data.
+
+
+Now that our index is somewhat normalized we will try some linear models using Severity index as the response.
+
+While researching risk factors in aviation accidents, I found a source that stated that aircraft twin engines and flying low visibility conditions tend to have more accidents. I will research these assumptions with our data.
+
+https://reader.elsevier.com/reader/sd/pii/S0001457515000329?token=3FF85F7B7FF42CD4EF69705821175FD31A5B9F41E3EBBB49EB7CD92356E1E585A2124381BEE558D76273A008DEFFFCF2&originRegion=us-east-1&originCreation=20220302201811
+
+
+From looking at our summaries we can see that Weather, and number of engines explains 4-5% of the variance when computed seperately, together they explain about 8%. Because the adjusted R^2 is low I will adjust the model to include the numeric variables, and some factors.
+
+
+
+Throwing in this many variables results in explaining about 56% of the variance. I will try to find the largest adjusted R^2 for a single variable.
+
+```{r}
+#convert factors to numeric for pca
+av1$Airport.Code = as.numeric(av1$Airport.Code)
+av1$Injury.Severity = as.numeric(av1$Injury.Severity)
+av1$Aircraft.damage = as.numeric(av1$Aircraft.damage)
+#av1$Aircraft.Category = as.numeric(av1$Aircraft.Category) only one factor
+av1$Make = as.numeric(av1$Make)
+av1$Model = as.numeric(av1$Model)
+av1$Amateur.Built = as.numeric(av1$Amateur.Built)
+av1$Engine.Type = as.numeric(av1$Engine.Type)
+
+av1$Broad.phase.of.flight = as.numeric(av1$Broad.phase.of.flight)
+av1$Engine.Type = as.numeric(av1$Engine.Type)
+av1$Weather.Condition = as.numeric(av1$Weather.Condition)
+av1$Number.of.Engines = as.numeric(av1$Number.of.Engines)
+av1$Purpose.of.flight = as.numeric(av1$Purpose.of.flight)
+numdata = select_if(av1, is.numeric)             # Subset numeric columns with dplyr
+numdata = numdata[2:20]  
+
+#find columns with NA
+colSums(is.na(numdata))
+str(numdata)
+#replace NA with 0, for numeric data
+numdata = replace_na(numdata, value= 0)
+
+#no NA's in data, but might screw the results of PCA, might remove columns later
+colSums(is.na(numdata))
+
+numdata.pca = prcomp(numdata, scale. = TRUE)
+summary(numdata.pca)
+numdata.pca$rotation
+#reverse the signs
+numdata.pca$rotation = -1*numdata.pca$rotation
+
+biplot(numdata.pca)
+screeplot(numdata.pca, type = "l", npcs = 19, main = "All Principal Components")
+cumpro = cumsum(numdata.pca$sdev^2 / sum(numdata.pca$sdev^2))
+plot(cumpro, xlab = "Principal Component #", ylab = "Amount of explained variance", main = "Cumulative variance plot")
+```
+I don't think PCA was very successful after applying it to this dataset, the first component only explains about 10% of that data. It looks like the cumalitve sum graph follows a pareto shape.
+
+
+```{r}
+avData = read_csv("/cloud/project/Data/AviationData.csv")
+x = av1
+
+
+
+#filter(x, State == "AZ")
+#x = x %>% filter(State %in% c("CA", "TX", "FL", "AK", "AZ"))
+#filter(x, State == "AZ")
+x = x %>% filter(!is.na(Broad.phase.of.flight))
+x = x %>% filter(!is.na(State))
+x = x %>% filter(!is.na(Weather.Condition))
+x = x %>% filter(!is.na(Purpose.of.flight))
+x = x %>% filter(!is.na(Engine.Type))
+x = x %>% filter(!is.na(Amateur.Built))
+x = x %>% filter(!is.na(Number.of.Engines))
+
+#filter(x, Airport.Code == "SEA")
+
+sum(is.na(x[c('State', 'Broad.phase.of.flight', 'Weather.Condition', 'Purpose.of.flight', 'Engine.Type', 'Amateur.Built', 'Model')]))
+#av1[is.na(av1[Severity.Index])] = 0
+a = table(x['State'])
+a = as.data.frame(a)
+y = x %>%
+add_count(State, sort=TRUE)
+#filter(y, State == "TX")
+
+sankey_flow_addNum = y %>%
+  mutate(Number.of.Engines = case_when(Number.of.Engines != "" ~ paste0(Number.of.Engines, sep='_1')),
+         Aircraft.damage = case_when(Aircraft.damage != "" ~ paste0(Aircraft.damage, sep='_2')),
+         Injury.Severity = case_when(Injury.Severity != "" ~ paste0(Injury.Severity, sep='_3')))
+sankey_flow_freq = sankey_flow_addNum %>%
+  group_by(Number.of.Engines, Aircraft.damage, Injury.Severity) %>%
+  summarize(n=n()) %>%
+  ungroup()
+flow_1_2 = sankey_flow_freq %>%
+  select(In = 1, Out=2, 4)
+flow_2_3 = sankey_flow_freq %>%
+  select(In = 2, Out=3, 4)
+
+sankey_plot_data = rbind(flow_1_2, flow_2_3) %>%
+  filter(!is.na(Out)) %>%
+  group_by(In, Out) %>% 
+  summarise(Freq=sum(n)) %>%
+  ungroup
+
+nodes = sankey_plot_data %>%
+  select(In, Out) %>%
+  pivot_longer(c("In", "Out"), names_to = "col_name", values_to="name_match") %>%
+  select(-1) %>% distinct() %>%
+  mutate(name = str_sub(name_match, end=-3))
+nodes = data.frame(nodes)
+sankey_plot_id = sankey_plot_data%>%
+  mutate(IDIn = match(In, nodes$name_match)-1, 
+         IDOut = match(Out, nodes$name_match)-1)
+sankey_plot_id = data.frame(sankey_plot_id)
+sankeyNetwork(Links = sankey_plot_id, Nodes = nodes, 
+              Source = "IDIn", Target = "IDOut", 
+              Value="Freq", NodeID= "name", sinksRight = FALSE)
+```
+
+
+
+```{r}
+df= read.csv("/cloud/project/Data/CleanedAviationData.csv")
+
+#sample the data, will attempt on full dataset later.
+
+accident = df %>% group_by(Airport.Code) %>% filter(n() != 1)
+#accident = accident[order(-accident$Accident.Severity.Index),]
+#?qqplot
+#?sample
+set.seed(1)
+accident = sample_n(accident, 1, replace = FALSE)
+qqPlot(accident$Accident.Severity.Index)
+accident$Accident.Severity.Index = log(accident$Accident.Severity.Index)
+accident$Accident.Severity.Index[accident$Accident.Severity.Index == "-Inf"] = 0
+qqPlot(accident$Accident.Severity.Index)
+max(accident$Accident.Severity.Index)
+accident = accident %>% 
+  group_by(Airport.Code) %>% 
+  mutate(mean_risk = mean(Accident.Severity.Index))
+
+#checking NA values
+str(accident)
+colSums(is.na(accident))
+sapply(accident, class)
+any(is.infinite(accident$Accident.Severity.Index))
+sapply(accident, is.infinite)
+accident %>% 
+  filter_all(all_vars(!is.infinite(.)))
+
+
+```
+
+```{r}
+
+library(cluster)
+library(factoextra)
+#install.packages("fpc")
+library(fpc)
+
+cstats.table <- function(dist, tree, k) {
+clust.assess <- c("cluster.number","n","within.cluster.ss","average.within","average.between",
+                  "wb.ratio","dunn2","avg.silwidth")
+clust.size <- c("cluster.size")
+stats.names <- c()
+row.clust <- c()
+output.stats <- matrix(ncol = k, nrow = length(clust.assess))
+cluster.sizes <- matrix(ncol = k, nrow = k)
+for(i in c(1:k)){
+  row.clust[i] <- paste("Cluster-", i, " size")
+}
+for(i in c(2:k)){
+  stats.names[i] <- paste("Test", i-1)
+  
+  for(j in seq_along(clust.assess)){
+    output.stats[j, i] <- unlist(cluster.stats(d = dist, clustering = cutree(tree, k = i))[clust.assess])[j]
+    
+  }
+  
+  for(d in 1:k) {
+    cluster.sizes[d, i] <- unlist(cluster.stats(d = dist, clustering = cutree(tree, k = i))[clust.size])[d]
+    dim(cluster.sizes[d, i]) <- c(length(cluster.sizes[i]), 1)
+    cluster.sizes[d, i]
+    
+  }
+}
+output.stats.df <- data.frame(output.stats)
+cluster.sizes <- data.frame(cluster.sizes)
+cluster.sizes[is.na(cluster.sizes)] <- 0
+rows.all <- c(clust.assess, row.clust)
+# rownames(output.stats.df) <- clust.assess
+output <- rbind(output.stats.df, cluster.sizes)[ ,-1]
+colnames(output) <- stats.names[2:k]
+rownames(output) <- rows.all
+is.num <- sapply(output, is.numeric)
+output[is.num] <- lapply(output[is.num], round, 2)
+output
+}
+# I am capping the maximum amout of clusters by 7
+# I want to choose a reasonable number, based on which I will be able to see basic differences between customer groups as a result
+```
+
+
+
+```{r}
+library(ggplot2)
+numdata = accident
+numdata$Airport.Code = as.numeric(numdata$Airport.Code)
+numdata$Injury.Severity = as.numeric(numdata$Injury.Severity)
+numdata$Aircraft.damage = as.numeric(numdata$Aircraft.damage)
+#av1$Aircraft.Category = as.numeric(av1$Aircraft.Category) only one factor
+numdata$Make = as.numeric(numdata$Make)
+numdata$Model = as.numeric(numdata$Model)
+numdata$Amateur.Built = as.numeric(numdata$Amateur.Built)
+numdata$Engine.Type = as.numeric(numdata$Engine.Type)
+
+numdata$Broad.phase.of.flight = as.numeric(numdata$Broad.phase.of.flight)
+numdata$Engine.Type = as.numeric(numdata$Engine.Type)
+numdata$Weather.Condition = as.numeric(numdata$Weather.Condition)
+numdata$Number.of.Engines = as.numeric(numdata$Number.of.Engines)
+numdata$Purpose.of.flight = as.numeric(numdata$Purpose.of.flight)
+numdata = select_if(numdata, is.numeric)             # Subset numeric columns with dplyr
+numdata = numdata[2:20]  
+colSums(is.na(numdata))
+
+#replace NA with 0, for numeric data
+numdata = replace_na(numdata, value= 0)
+
+#no NA's in data, but might screw the results of PCA, might remove columns later
+colSums(is.na(numdata))
+#unique(numdata$Broad.phase.of.flight)
+numdata.pca = prcomp(numdata, scale. = FALSE)
+summary(numdata.pca)
+numdata.pca$rotation
+#reverse the signs
+numdata.pca$rotation = -1*numdata.pca$rotation
+
+biplot(numdata.pca)
+screeplot(numdata.pca, type = "l", npcs = 19, main = "All Principal Components")
+cumpro = cumsum(numdata.pca$sdev^2 / sum(numdata.pca$sdev^2))
+plot(cumpro, xlab = "Principal Component #", ylab = "Amount of explained variance", main = "Cumulative variance plot")
+str(numdata)
+
+```
+```{r}
+#install.packages("backports")
+library(backports)
+#install.packages("arulesViz")
+library(arulesViz)
+arule = accident[, c("Injury.Severity", "Aircraft.damage", "Amateur.Built", "Number.of.Engines", "Engine.Type", "Broad.phase.of.flight", "Weather.Condition")]
+arule$Injury.Severity = as.character(arule$Injury.Severity)
+arule$Aircraft.damage = as.character(arule$Aircraft.damage)
+arule$Amateur.Built = as.character(arule$Amateur.Built)
+arule$Number.of.Engines = as.character(arule$Number.of.Engines)
+arule$Engine.Type = as.character(arule$Engine.Type)
+arule$Broad.phase.of.flight = as.character(arule$Broad.phase.of.flight)
+arule$Weather.Condition = as.character(arule$Weather.Condition)
+
+items = paste(arule$Injury.Severity, arule$Aircraft.damage, arule$Amateur.Built, arule$Number.of.Engines, arule$Engine.Type, arule$Broad.phase.of.flight, arule$Weather.Condition, sep = ",")
+dats <- strsplit(as.character(items),',',fixed=T)
+trans <- as(dats, "transactions")
+arule_rules = apriori(trans,parameter = list(support = 0.01, confidence = 0.8, minlen=3))
+rules_conf <- sort (arule_rules, by="confidence", decreasing=TRUE)
+plot(rules_conf, method="graph")
+inspect((rules_conf)) 
+subsetRules <- which(colSums(is.subset(arule_rules, arule_rules)) > 1)#removes duplicate rules
+length(subsetRules)
+subrules2 <- head(sort(arule_rules, by="lift"), 10)
+plot(subrules2, method="graph")
+
+inspect((sort(arule_rules, by = "confidence")))
+subsets <- which(colSums(is.subset(arule_rules, arule_rules)) > 1)
+arule_rules <- arule_rules[-subsets]
+frequentItems <- eclat (trans, parameter = list(supp = 0.04, maxlen = 15)) # calculates support for 
+itemFrequencyPlot(trans, topN=10, type="absolute", main="Item Frequency") 
+table(accident$Weather.Condition)
+plot(arule_rules, "graph")
+```
+
+
+
+```{r}
+#Injury severity, aircraft damage, amateur.built, number of engines, engine.type, purpose of flight, phase of flight
+new_df = accident
+new_df$Number.of.Engines = as.factor(new_df$Number.of.Engines)
+str(new_df)
+accident1hot = model.matrix(~.-1, data = new_df[, c("Injury.Severity", "Aircraft.damage", "Amateur.Built", "Number.of.Engines", "Engine.Type", "Broad.phase.of.flight", "Weather.Condition")],
+                       contrasts.arg = list(
+                        InjurySeverity = contrasts(new_df$Injury.Severity, contrasts = FALSE),
+                        AircraftDamage = contrasts(new_df$Aircraft.damage, contrasts = FALSE),
+                        Amateur.Built  = contrasts(new_df$Amateur.Built , contrasts = FALSE), 
+                        Number.of.Engines  = contrasts(new_df$Number.of.Engines , contrasts = FALSE),
+                        Engine.Type  = contrasts(new_df$Engine.Type , contrasts = FALSE),
+                        Broad.phase.of.flight  = contrasts(new_df$Broad.phase.of.flight , contrasts = FALSE),
+                        Weather.Condition  = contrasts(new_df$Weather.Condition , contrasts = FALSE)
+                       ))
+accident1hot = data.frame(accident1hot)
+str(merged[,1:36])
+merged[1:4] <- sapply(merged[,1:4],as.numeric)
+onehot.pca = prcomp(merged[,1:36], center=TRUE, scale = FALSE)
+plot(onehot.pca)
+summary(onehot.pca)
+std = onehot.pca$sdev
+pr_var = std^2
+prop = pr_var/sum(pr_var)
+plot(cumsum(prop), ylab = "Cumulative Proportion of Variance", xlab = "Principal Component", main="PCA cumulative screeplot")
+var = get_pca_var(onehot.pca)
+fviz_pca_var(onehot.pca)
+```
+
+```{r}
+temp = accident[, c("Total.Fatal.Injuries", "Total.Serious.Injuries", "Total.Minor.Injuries", "Total.Uninjured")]
+merged = merge(temp, accident1hot, by = "row.names")
+merged = merged[2:39]
+merged = sample_n(merged, 50)
+#accident1hot= cbind(accident1hot, temp) 
+
+gower.dist = daisy(merged,metric = c("gower"))
+divisive.clust = diana(as.matrix(gower.dist), 
+                  diss = TRUE, keep.diss = TRUE)
+grp = cutree(divisive.clust, 4)
+plot(divisive.clust)
+
+aggl.clust.c <- hclust(gower.dist, method = "complete")
+plot(aggl.clust.c,
+     main = "Agglomerative, complete linkages")
+rect.hclust(divisive.clust, k = 4, border = 2:5)
+
+dist.bi = dist(accident1hot, method = "euclidean")
+cluster.bi = hclust(dist.bi, method="ward")
+plot(cluster.bi)
+clusterGroups = cutree(cluster.bi, k=10)
+tapply(accident1hot$Injury.SeverityNon.Fatal, clusterGroups,mean)
+stats.df.divisive <- cstats.table(gower.dist, divisive.clust, 7)
+stats.df.divisive
+
+stats.df.aggl <-cstats.table(gower.dist, aggl.clust.c, 7) #complete linkages looks like the most balanced approach
+stats.df.aggl
+
+library(factoextra)
+fviz_nbclust(merged, kmodes, method = "silhouette")+
+  labs(subtitle = "Silhouette method")
+fviz_nbclust(merged, kmodes, method = "wss") +
+    geom_vline(xintercept = 4, linetype = 2)+
+  labs(subtitle = "Elbow method")
+
+dclust = cutree(divisive.clust, k = 4)
+library("cluster")
+pltree(merged, cex = 0.6, hang = -1, main = "Dendrogram of Agnes") 
+```
+
+Cannot use kmeans because after applying kmeans our data will no longer be binary
+```{r}
+#install.packages("klaR")
+library(klaR) #for kmodes, kmodes makes clusters interpretable
+#install.packages("arules")
+library(arules)
+
+```
+
+```{r}
+#install.packages("arulesViz")
+library(arulesViz)
+sample = accident[sample(nrow(accident), 50), ]
+#install.packages("corrplot")
+library(corrplot)
+acci = accident1hot[1:32]
+m = cor(accident1hot[1:32])
+cor_matrix_rm = m                  # Modify correlation matrix
+cor_matrix_rm[upper.tri(cor_matrix_rm)] = 0
+diag(cor_matrix_rm) = 0
+cor_matrix_rm
+acci = acci[ , !apply(cor_matrix_rm,    # Remove highly correlated variables
+                           2,
+                           function(x) any(x > 0.9))]
+#asrules = apriori(accident, parameter = list(support = 0.01, confidence = 0.5))
+#asrules
+```
+
+
+```{r}
+#factoextra library kmodes on one hot encodes data
+
+
+```
+
+```{r}
+library(binaryLogic)
+library(ggplot2)
+encode_binary <- function(x, order = unique(x), name = "v_") {
+  x <- as.numeric(factor(x, levels = order, exclude = NULL))
+  x2 <- as.binary(x)
+  maxlen <- max(sapply(x2, length))
+  x2 <- lapply(x2, function(y) {
+    l <- length(y)
+    if (l < maxlen) {
+      y <- c(rep(0, (maxlen - l)), y)
+    }
+    y
+  })
+  d <- as.data.frame(t(as.data.frame(x2)))
+  rownames(d) <- NULL
+  colnames(d) <- paste0(name, 1:maxlen)
+  d
+}
+
+colSums(is.na(accident))
+#Injury severity, aircraft damage, amateur.built, number of engines, engine.type, purpose of flight, phase of flight
+
+new_df = accident[c("Injury.Severity")]
+new_df <- cbind(new_df, encode_binary(new_df[["Injury.Severity"]], name = "fatal_"))
+new_df1 = accident[c("Aircraft.damage")]
+new_df1 <- cbind(new_df1, encode_binary(new_df1[["Aircraft.damage"]], name = "damage_"))
+df = cbind(new_df, new_df1)
+
+
+new_df = accident[c("Amateur.Built")]
+new_df <- cbind(new_df, encode_binary(new_df[["Amateur.Built"]], name = "amateur_"))
+new_df1 = accident[c("Number.of.Engines")]
+new_df1 <- cbind(new_df1, encode_binary(new_df1[["Number.of.Engines"]], name = "num_engines_"))
+df = cbind(df, new_df, new_df1)
+
+new_df = accident[c("Engine.Type")]
+new_df <- cbind(new_df, encode_binary(new_df[["Engine.Type"]], name = "engine_type_"))
+new_df1 = accident[c("Purpose.of.flight")]
+new_df1 <- cbind(new_df1, encode_binary(new_df1[["Purpose.of.flight"]], name = "purpose_"))
+df = cbind(df, new_df, new_df1)
+
+new_df = accident[c("Weather.Condition")]
+new_df <- cbind(new_df, encode_binary(new_df[["Weather.Condition"]], name = "weather_"))
+new_df1 = accident[c("Broad.phase.of.flight")]
+new_df1 <- cbind(new_df1, encode_binary(new_df1[["Broad.phase.of.flight"]], name = "phase_"))
+df = cbind(df, new_df, new_df1)
+
+#state, year, month, day
+new_df = accident[c("State")]
+new_df <- cbind(new_df, encode_binary(new_df[["State"]], name = "state_"))
+new_df1 = accident[c("Event.Date.Year")]
+new_df1 <- cbind(new_df1, encode_binary(new_df1[["Event.Date.Year"]], name = "year_"))
+df = cbind(df, new_df, new_df1)
+
+new_df = accident[c("Event.Date.Month")]
+new_df <- cbind(new_df, encode_binary(new_df[["Event.Date.Month"]], name = "month_"))
+new_df1 = accident[c("Event.Date.Day")]
+new_df1 <- cbind(new_df1, encode_binary(new_df1[["Event.Date.Day"]], name = "day_"))
+df = cbind(df, new_df, new_df1)
+
+#unique(accident$Weather.Condition)
+#n_distinct(accident)
+#make = 590, model-aircarrier= 1055>
+#new_df = data.frame(new_df)
+#head(new_df)
+#remove original columns
+bidf = df[,c(2:3, 5:7, 9:10, 12:14, 16:18, 20:24, 26:27, 29:32, 34:39, 41:45, 47:50, 52:56)]
+bidf = cbind(bidf, accident$mean_risk)
+x = bidf[, -45]
+y = bidf[, 45]
+#y = mean airport risk, since we want to predict airport risk
+y = data.frame(y)
+pca = prcomp(x, center=TRUE, scale = FALSE)
+summary(pca)
+str(pca)
+#install.packages("ggbiplot")
+#library(ggbiplot)
+biplot(pca)
+pca$rotation
+#pca$loadings
+std = pca$sdev
+pr_var = std^2
+prop = pr_var/sum(pr_var)
+plot(cumsum(prop), ylab = "Cumulative Proportion of Variance", xlab = "Principal Component", main="PCA cumulative screeplot")
+```
+Euclidean distance measurement cannot be used because after the first iteration the distance will no longer be integer values
+
+
+
+```{r}
+library("reshape2")
+library("purrr")
+library("dplyr")
+# let's start with a dendrogram
+library("dendextend")
+#install.packages("psych")
+library(psych)
+library(corrplot)
+hist(accident$Accident.Severity.Index)
+clust.num = cutree(aggl.clust.c, k = 2)
+accident.cl = cbind(accident, clust.num)
+accident.cl$...36 = as.character(accident.cl$...36)
+names(accident.cl)[names(accident.cl) == '...36'] <- "Cluster"
+ggplot(accident.cl, aes(Broad.phase.of.flight, Accident.Severity.Index, color=Cluster)) + geom_point()
+
+dat = accident[ , c(9:11, 15:17, 19:27)] 
+str(dat)
+dat[, 1:15] <- sapply(dat[, 1:15], as.numeric)
+
+datamatrix <- cor(dat)
+corrplot(datamatrix, method="number")
+
+colSums(sapply(dat, is.finite))
+any(is.na(dat))
+str(dat)
+is.na(dat)
+scree(dat, pc=FALSE)
+```
